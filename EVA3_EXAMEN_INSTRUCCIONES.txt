@@ -1,0 +1,114 @@
+SET FOREIGN_KEY_CHECKS = 0;
+
+ALTER TABLE cuartos DROP FOREIGN KEY cuartos_ibfk_1;
+ALTER TABLE cuentas_pacientes DROP FOREIGN KEY cuentas_pacientes_ibfk_1;
+ALTER TABLE cuentas_pacientes DROP FOREIGN KEY cuentas_pacientes_ibfk_2;
+ALTER TABLE cuentas_pacientes_detalles DROP FOREIGN KEY cuentas_pacientes_detalles_ibfk_1;
+ALTER TABLE direcciones_empleados DROP FOREIGN KEY direcciones_empleados_ibfk_1;
+ALTER TABLE direcciones_empleados DROP FOREIGN KEY direcciones_empleados_ibfk_2;
+ALTER TABLE direcciones_pacientes DROP FOREIGN KEY direcciones_pacientes_ibfk_1;
+ALTER TABLE direcciones_pacientes DROP FOREIGN KEY direcciones_pacientes_ibfk_2;
+ALTER TABLE formas_pago_pacientes DROP FOREIGN KEY formas_pago_pacientes_ibfk_1;
+ALTER TABLE formas_pago_pacientes DROP FOREIGN KEY formas_pago_pacientes_ibfk_2;
+ALTER TABLE registro_pacientes DROP FOREIGN KEY registro_pacientes_ibfk_1;
+ALTER TABLE registro_pacientes DROP FOREIGN KEY registro_pacientes_ibfk_2;
+ALTER TABLE registro_pacientes DROP FOREIGN KEY registro_pacientes_ibfk_3;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+----------------------------------------------------------------------------
+
+-- TRIGGER para manejar actualización en la tabla `pacientes`
+DELIMITER $$
+CREATE TRIGGER actualizar_pacientes_cascade
+AFTER UPDATE ON pacientes
+FOR EACH ROW
+BEGIN
+    -- Actualizar tablas dependientes
+    UPDATE cuartos SET paciente_id = NEW.paciente_id WHERE paciente_id = OLD.paciente_id;
+    UPDATE cuentas_pacientes SET paciente_id = NEW.paciente_id WHERE paciente_id = OLD.paciente_id;
+    UPDATE direcciones_pacientes SET paciente_id = NEW.paciente_id WHERE paciente_id = OLD.paciente_id;
+    UPDATE formas_pago_pacientes SET paciente_id = NEW.paciente_id WHERE paciente_id = OLD.paciente_id;
+END$$
+DELIMITER ;
+
+-- TRIGGER para manejar eliminación en cascada de `pacientes`
+DELIMITER $$
+CREATE TRIGGER borrar_pacientes_cascade
+AFTER DELETE ON pacientes
+FOR EACH ROW
+BEGIN
+    DELETE FROM cuartos WHERE paciente_id = OLD.paciente_id;
+    DELETE FROM cuentas_pacientes WHERE paciente_id = OLD.paciente_id;
+    DELETE FROM direcciones_pacientes WHERE paciente_id = OLD.paciente_id;
+    DELETE FROM formas_pago_pacientes WHERE paciente_id = OLD.paciente_id;
+END$$
+DELIMITER ;
+
+------------------------------------------------------------------------------------
+
+CREATE TABLE consecutivos (
+    consecutivo INT NOT NULL
+);
+INSERT INTO consecutivos VALUES (1000);
+
+-------------------------------------------------------------------------------
+
+DELIMITER $$
+CREATE PROCEDURE ACTUALIZAR_PAGOS(IN paciente_id INT)
+BEGIN
+    SELECT 
+        fp.forma_pago AS TIPO_PAGO,
+        SUM(cp.costo_total) AS MONTO
+    FROM cuentas_pacientes cp
+    JOIN formas_pago_pacientes fpp ON cp.forma_pago_pac_id = fpp.forma_pago_pac_id
+    JOIN formas_pago fp ON fpp.forma_pago_id = fp.forma_pago_id
+    WHERE cp.paciente_id = paciente_id
+    GROUP BY fp.forma_pago;
+END$$
+DELIMITER ;
+
+-------------------------------------------------------------------------------
+
+DELIMITER $$
+CREATE FUNCTION generar_nss(fecha_nacimiento DATE) 
+RETURNS VARCHAR(15)
+READS SQL DATA
+BEGIN
+    DECLARE oficina VARCHAR(2);
+    DECLARE anio_inscripcion INT;
+    DECLARE anio_nacimiento CHAR(2);
+    DECLARE consecutivo INT;
+    DECLARE digito_verificador INT;
+    DECLARE nss_base VARCHAR(14);
+
+    -- Generar número de oficina
+    SET oficina = LPAD(FLOOR(RAND() * 100), 2, '0');
+
+    -- Generar año de inscripción
+    SET anio_inscripcion = FLOOR(YEAR(fecha_nacimiento) + 15 + RAND() * (YEAR(CURDATE()) - (YEAR(fecha_nacimiento) + 15)));
+
+    -- Año de nacimiento
+    SET anio_nacimiento = RIGHT(YEAR(fecha_nacimiento), 2);
+
+    -- Obtener consecutivo
+    SELECT consecutivo INTO consecutivo FROM consecutivos;
+    UPDATE consecutivos SET consecutivo = consecutivo + 1;
+
+    -- Generar base NSS
+    SET nss_base = CONCAT(oficina, '-', anio_inscripcion, '-', anio_nacimiento, '-', LPAD(consecutivo, 4, '0'));
+
+    -- Calcular dígito verificador
+    SET digito_verificador = (
+        10 - MOD(
+            (SUBSTRING(nss_base, 1, 1) * 1) +
+            (SUBSTRING(nss_base, 2, 1) * 2) +
+            (SUBSTRING(nss_base, 3, 1) * 1) +
+            (SUBSTRING(nss_base, 4, 1) * 2), 10
+        )
+    );
+
+    -- Retornar NSS completo
+    RETURN CONCAT(nss_base, '-', digito_verificador);
+END$$
+DELIMITER ;
